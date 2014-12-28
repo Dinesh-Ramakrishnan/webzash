@@ -58,18 +58,18 @@ class Wzuser extends WebzashAppModel {
 			),
 		),
 		'fullname' => array(
-			'rule1' => array(
-				'rule' => 'notEmpty',
-				'message' => 'Fullname cannot be empty',
-				'required' => true,
-				'allowEmpty' => false,
-			),
-			'rule2' => array(
-				'rule' => array('maxLength', 255),
-				'message' => 'Fullname cannot be more than 255 characters',
-				'required' => true,
-				'allowEmpty' => false,
-			),
+			// 'rule1' => array(
+			// 	'rule' => 'notEmpty',
+			// 	'message' => 'Fullname cannot be empty',
+			// 	'required' => true,
+			// 	'allowEmpty' => false,
+			// ),
+			// 'rule2' => array(
+			// 	'rule' => array('maxLength', 255),
+			// 	'message' => 'Fullname cannot be more than 255 characters',
+			// 	'required' => true,
+			// 	'allowEmpty' => false,
+			// ),
 		),
 		'password' => array(
 			'rule1' => array(
@@ -80,24 +80,24 @@ class Wzuser extends WebzashAppModel {
 			),
 		),
 		'email' => array(
-			'rule1' => array(
-				'rule' => 'notEmpty',
-				'message' => 'Email cannot be empty',
-				'required' => true,
-				'allowEmpty' => false,
-			),
-			'rule2' => array(
-				'rule' => 'email',
-				'message' => 'Email is not a valid email address',
-				'required' => true,
-				'allowEmpty' => false,
-			),
-			'rule3' => array(
-				'rule' => 'isUnique',
-				'message' => 'Email is already in use',
-				'required' => true,
-				'allowEmpty' => false,
-			),
+			// 'rule1' => array(
+			// 	'rule' => 'notEmpty',
+			// 	'message' => 'Email cannot be empty',
+			// 	'required' => true,
+			// 	'allowEmpty' => false,
+			// ),
+			// 'rule2' => array(
+			// 	'rule' => 'email',
+			// 	'message' => 'Email is not a valid email address',
+			// 	'required' => true,
+			// 	'allowEmpty' => false,
+			// ),
+			// 'rule3' => array(
+			// 	'rule' => 'isUnique',
+			// 	'message' => 'Email is already in use',
+			// 	'required' => true,
+			// 	'allowEmpty' => false,
+			// ),
 		),
 		'timezone' => array(
 			'rule1' => array(

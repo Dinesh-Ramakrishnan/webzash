@@ -27,6 +27,7 @@
 
 App::uses('WebzashAppController', 'Webzash.Controller');
 App::uses('ConnectionManager', 'Model');
+App::uses('JoomlaAuth', 'Webzash.Lib');
 
 /**
  * Webzash Plugin Wzusers Controller
@@ -75,113 +76,8 @@ class WzusersController extends WebzashAppController {
  * @return void
  */
 	public function add() {
-
-		$this->set('title_for_layout', __d('webzash', 'Add User'));
-
-		$this->Wzuser->useDbConfig = 'wz';
-		$this->Wzaccount->useDbConfig = 'wz';
-		$this->Wzuseraccount->useDbConfig = 'wz';
-		$this->Wzsetting->useDbConfig = 'wz';
-
-		$wzsetting = $this->Wzsetting->findById(1);
-		if (!$wzsetting) {
-			$this->Session->setFlash(__d('webzash', 'Please update your settings below before adding any users.'), 'danger');
-			return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzsettings', 'action' => 'edit'));
-		}
-
-		/* Create list of wzaccounts */
-		$wzaccounts = array(0 => '(ALL ACCOUNTS)') + $this->Wzaccount->find('list', array(
-			'fields' => array('Wzaccount.id', 'Wzaccount.label'),
-			'order' => array('Wzaccount.label')
-		));
-		$this->set('wzaccounts', $wzaccounts);
-
-		/* On POST */
-		if ($this->request->is('post')) {
-			$this->Wzuser->create();
-			if (!empty($this->request->data)) {
-				/* Unset ID */
-				unset($this->request->data['Wzuser']['id']);
-
-				/* Check length of password */
-				if (strlen($this->request->data['Wzuser']['password']) < 4) {
-					$this->Session->setFlash(__d('webzash', 'Password should be atleast 4 characters.'), 'danger');
-					return;
-				}
-
-				$temp_password = $this->request->data['Wzuser']['password'];
-				$this->request->data['Wzuser']['password'] = Security::hash($this->request->data['Wzuser']['password'], 'sha1', true);
-
-				$verification_key = Security::hash(uniqid() . uniqid());
-				$this->request->data['Wzuser']['verification_key'] = $verification_key;
-
-				/* Check if user is allowed access to all accounts */
-				if (!empty($this->request->data['Wzuser']['wzaccount_ids'])) {
-					if (in_array(0, $this->request->data['Wzuser']['wzaccount_ids'])) {
-						$this->request->data['Wzuser']['all_accounts'] = 1;
-					} else {
-						$this->request->data['Wzuser']['all_accounts'] = 0;
-					}
-				} else {
-					$this->request->data['Wzuser']['wzaccount_ids'] = array();
-					$this->request->data['Wzuser']['all_accounts'] = 0;
-				}
-
-				$this->request->data['Wzuser']['retry_count'] = 0;
-				$this->request->data['Wzuser']['timezone'] = 'UTC';
-
-				/* Save user */
-				$ds = $this->Wzuser->getDataSource();
-				$ds->begin();
-
-				if ($this->Wzuser->save($this->request->data)) {
-
-					/* Save user - accounts association */
-					if ($this->request->data['Wzuser']['all_accounts'] != 1) {
-						if (!empty($this->request->data['Wzuser']['wzaccount_ids'])) {
-							$data = array();
-							foreach ($this->request->data['Wzuser']['wzaccount_ids'] as $row => $wzaccount_id) {
-								if (!$this->Wzaccount->exists($wzaccount_id)) {
-									continue;
-								}
-								$data[] = array('wzuser_id' => $this->Wzuser->id, 'wzaccount_id' => $wzaccount_id, 'role' => '');
-							}
-							if (!$this->Wzuseraccount->saveMany($data)) {
-								$ds->rollback();
-								$this->Session->setFlash(__d('webzash', 'Failed to create user account. Please, try again.'), 'danger');
-								return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'index'));
-							}
-						}
-					}
-
-					/* Sending email */
-					$viewVars = array(
-						'username' => $this->request->data['Wzuser']['username'],
-						'fullname' => $this->request->data['Wzuser']['fullname'],
-						'verification_key' => $verification_key,
-						'email_verification' => $wzsetting['Wzsetting']['email_verification'],
-						'admin_verification' => $wzsetting['Wzsetting']['admin_verification'],
-					);
-					$this->Generic->sendEmail(
-						$this->request->data['Wzuser']['email'],
-						'Your registraion details',
-						'user_add', $viewVars, true, true
-					);
-
-					$ds->commit();
-					$this->Session->setFlash(__d('webzash', 'User account created.'), 'success');
-					return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'index'));
-				} else {
-					$this->request->data['Wzuser']['password'] = $temp_password;
-					$ds->rollback();
-					$this->Session->setFlash(__d('webzash', 'Failed to create user account. Please, try again.'), 'danger');
-					return;
-				}
-			} else {
-				$this->Session->setFlash(__d('webzash', 'No data. Please, try again.'), 'danger');
-				return;
-			}
-		}
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 
@@ -372,112 +268,67 @@ class WzusersController extends WebzashAppController {
 
 		$this->layout = 'user';
 
-		$this->Wzuser->useDbConfig = 'wz';
-		$this->Wzsetting->useDbConfig = 'wz';
-
 		$view = new View($this);
 		$this->Html = $view->loadHelper('Html');
 
-		$wzsetting = $this->Wzsetting->findById(1);
+		$this->Wzuser->useDbConfig = 'wz';
+		$this->Wzsetting->useDbConfig = 'wz';
 
-		/* Check if this is the first time user is using this application */
-		$default_password = false;
-		$first_login = false;
-		$admin_check = $this->Wzuser->find('first', array('conditions' => array(
-			'id' => 1,
-			'username' => 'admin',
-			'password' => '',
-		)));
-		if ($admin_check) {
-			/* Password still not updated for admin user */
-			$default_password = true;
+		/* on POST */
+		if ($this->request->is('post') || $this->request->is('put')) {
 
-			if ($admin_check['Wzuser']['email'] == '') {
-				/* This is the first login by user */
-				$first_login = true;
-			}
-		}
+			$joomla = new JoomlaAuth();
+			$login_status = $joomla->checkPassword(
+				$this->request->data['Wzuser']['username'],
+				$this->request->data['Wzuser']['password']);
 
-		$this->set('first_login', $first_login);
-		$this->set('default_password', $default_password);
-
-		if ($this->request->is('post')) {
-			/* Check status of user account */
-			if ($default_password &&
-				$this->request->data['Wzuser']['username'] == 'admin' &&
-				$this->request->data['Wzuser']['password'] == 'admin') {
-					$password = '';
-			} else {
-				$password = Security::hash($this->request->data['Wzuser']['password'], 'sha1', true);
-			}
-
-			$user = $this->Wzuser->find('first', array('conditions' => array(
-				'username' => $this->request->data['Wzuser']['username'],
-				'password' => $password
-			)));
-
-			if (!$user) {
-				/* On failed login attempt, increase the retry count */
-				$wzuser = $this->Wzuser->find('first', array(
-					'conditions' => array(
-						'username' => $this->request->data['Wzuser']['username'],
-					),
-				));
-				if ($wzuser) {
-					$this->Wzuser->read(null, $wzuser['Wzuser']['id']);
-					/* Use 4 since retry_count starts from 0 */
-					if ($wzuser['Wzuser']['retry_count'] >= 4) {
-						/* If max retry count reached, disable account */
-						$this->Wzuser->saveField('status', 0);
-					} else {
-						/* Update retry count */
-						$this->Wzuser->saveField('retry_count',
-							$wzuser['Wzuser']['retry_count'] + 1
-						);
-					}
-
-					/* Use 4 since retry_count starts from 0 */
-					if ($wzuser['Wzuser']['retry_count'] >= 4) {
-						$this->Session->setFlash(__d('webzash', 'Login failed. You have exceed 5 login attempts hence your account has been disabled. Please contact your administrator to re-enable the account.'), 'danger');
-					} else {
-						$this->Session->setFlash(__d('webzash', 'Login failed. You still have %d attempts left out of 5 before the account is disabled.', 4 - $wzuser['Wzuser']['retry_count']), 'danger');
-					}
-				} else {
-					$this->Session->setFlash(__d('webzash', 'Login failed. Please, try again.'), 'danger');
-				}
-				return;
-			}
-
-			if ($user['Wzuser']['status'] == 0) {
-				$this->Session->setFlash(__d('webzash', 'User account is diabled. Please contact your administrator.'), 'danger');
-				return;
-			}
-			if (!($wzsetting) || $wzsetting['Wzsetting']['admin_verification'] != 0) {
-				 if ($user['Wzuser']['admin_verified'] != 1) {
-					$this->Session->setFlash(__d('webzash', 'Administrator approval is pending. Please contact your administrator.'), 'danger');
-					return;
-				 }
-			}
-			if (!($wzsetting) || $wzsetting['Wzsetting']['email_verification'] != 0) {
-				 if ($user['Wzuser']['email_verified'] != 1) {
-					 $resendURL = $this->Html->link(__d('webzash', 'here'), array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'resend'));
-					$this->Session->setFlash(__d('webzash', 'Email verification is pending. Please verify your email. To resend verification email click ') . $resendURL . '.', 'danger');
-					return;
-				 }
-			}
-
-			/* Login */
-			if ($default_password &&
-				$this->request->data['Wzuser']['username'] == 'admin' &&
-				$this->request->data['Wzuser']['password'] == 'admin') {
-				$login_status = $this->Auth->login($user['Wzuser']);
-			} else {
-				$login_status = $this->Auth->login();
-			}
 			if ($login_status) {
-				/* Reset retry count on successful login */
-				$this->Wzuser->read(null, $this->Auth->user('id'));
-				$this->Wzuser->saveField('retry_count', 0);
+
+				$wzuser = $this->Wzuser->find('first', array('conditions' => array(
+					'username' => $this->request->data['Wzuser']['username'],
+				)));
+
+				$user_data = array();
+				if ($wzuser) {
+					$user_data = array(
+						'id' => $wzuser['Wzuser']['id'],
+						'username' => $wzuser['Wzuser']['username'],
+						'role' => $wzuser['Wzuser']['role'],
+					);
+				} else {
+					/* if user not found create a account */
+					$new_user['Wzuser'] = array(
+						'username' => $this->request->data['Wzuser']['username'],
+						'password' => '*',
+						'fullname' => '',
+						'email' => '',
+						'timezone' => 'UTC',
+						'role' => 'guest',
+						'status' => 0,
+						'verification_key' => '',
+						'email_verified' => 0,
+						'admin_verified' => 0,
+						'retry_count' => 0,
+						'all_accounts' => 0,
+					);
+
+					/* Create user */
+					$this->Wzuser->create();
+					if (!$this->Wzuser->save($new_user)) {
+						$this->Session->setFlash(__d('webzash', 'Failed to create user.'), 'danger');
+						return;
+					}
+
+					$user_data = array(
+						'id' => $this->Wzuser->id,
+						'username' => $this->Wzuser->username,
+						'role' => $this->Wzuser->role,
+					);
+				}
+
+				$this->Auth->login($user_data);
+
+				$wzsetting = $this->Wzsetting->findById(1);
 
 				if (empty($wzsetting['Wzsetting']['enable_logging'])) {
 					$this->Session->write('Wzsetting.enable_logging', 0);
@@ -495,29 +346,12 @@ class WzusersController extends WebzashAppController {
 					$this->Session->write('Wzsetting.drcr_toby', $wzsetting['Wzsetting']['drcr_toby']);
 				}
 
-				$this->Session->delete('FirstLogin');
-
-				/* Some basic checks for admin role */
-				if ($this->Auth->user('role') == 'admin') {
-					if ($this->request->data['Wzuser']['username'] == 'admin' &&
-						$this->request->data['Wzuser']['password'] == 'admin' &&
-						$this->Auth->user('id') == '1' &&
-						$this->Auth->user('email') == '') {
-						$this->Session->write('FirstLogin', 1);
-						$this->Session->setFlash(__d('webzash', 'Please update your password, fullname and email address to continue.'), 'danger');
-						return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'first'));
-					}
-					if ($this->request->data['Wzuser']['password'] == 'admin') {
-						$this->Session->setFlash(__d('webzash', 'Warning ! You are using the default password. Please change your password.'), 'danger');
-						return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'changepass'));
-					}
-				}
-
 				if ($this->Auth->user('role') == 'admin') {
 					return $this->redirect(array('plugin' => 'webzash', 'controller' => 'admin', 'action' => 'index'));
 				} else {
 					return $this->redirect($this->Auth->redirectUrl());
 				}
+
 			} else {
 				$this->Session->setFlash(__d('webzash', 'Login failed. Please, try again.'), 'danger');
 			}
@@ -529,528 +363,74 @@ class WzusersController extends WebzashAppController {
  */
 	public function logout() {
 		$this->Session->destroy();
-		return $this->redirect($this->Auth->logout());
+		$this->Auth->logout();
+
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->logoutURL());
 	}
 
 /**
  * verifiy email method
  */
 	public function verify() {
-
-		$this->set('title_for_layout', __d('webzash', 'User Email Verification'));
-
-		$this->layout = 'user';
-
-		$this->Wzuser->useDbConfig = 'wz';
-		$this->Wzsetting->useDbConfig = 'wz';
-
-		$wzsetting = $this->Wzsetting->findById(1);
-
-		$this->Auth->logout();
-
-		$this->set('success', false);
-
-		/* Check whether key is present in GET requets */
-		if (empty($this->params['url']['u'])) {
-			$this->set('success', false);
-			$this->Session->setFlash(__d('webzash', 'Email verification failed. Please, try again.'), 'danger');
-			return;
-		}
-		if (empty($this->params['url']['k'])) {
-			$this->set('success', false);
-			$this->Session->setFlash(__d('webzash', 'Email verification failed. Please, try again.'), 'danger');
-			return;
-		}
-
-		/* Get user count */
-		$wzuser = $this->Wzuser->find('first', array('conditions' => array(
-			'username' => $this->params['url']['u'],
-			'verification_key' => $this->params['url']['k']
-		)));
-
-		if (empty($wzuser)) {
-			$this->set('success', false);
-			$this->Session->setFlash(__d('webzash', 'Email verification failed. Please, try again.'), 'danger');
-			return;
-		}
-
-		/* Set email as verified */
-		$ds = $this->Wzuser->getDataSource();
-		$ds->begin();
-
-		$this->Wzuser->id = $wzuser['Wzuser']['id'];
-
-		if ($this->Wzuser->saveField('email_verified', '1')) {
-			$this->set('success', true);
-			$ds->commit();
-
-			/* Sending email */
-			$viewVars = array(
-				'fullname' => $wzuser['Wzuser']['fullname'],
-			);
-			$this->Generic->sendEmail(
-				$wzuser['Wzuser']['email'],
-				'Account verified',
-				'user_verify', $viewVars, true, true
-			);
-
-			$this->Session->setFlash(__d('webzash', 'User account verified.'), 'success');
-		} else {
-			$this->set('success', false);
-			$ds->rollback();
-			$this->Session->setFlash(__d('webzash', 'Email verification failed. Please, try again.'), 'danger');
-		}
-		return;
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 /**
  * resend verification email method
  */
 	public function resend() {
-
-		$this->set('title_for_layout', __d('webzash', 'Resend Verification Email'));
-
-		$this->layout = 'user';
-
-		$this->Wzuser->useDbConfig = 'wz';
-
-		$this->Auth->logout();
-
-		if ($this->request->is('post')) {
-			$wzuser = $this->Wzuser->find('first', array('conditions' => array(
-				'username' => $this->request->data['Wzuser']['userinfo']
-			)));
-			if (empty($wzuser)) {
-				$wzuser = $this->Wzuser->find('first', array('conditions' => array(
-					'email' => $this->request->data['Wzuser']['userinfo']
-				)));
-			}
-			if (empty($wzuser)) {
-				$this->Session->setFlash(__d('webzash', 'Invalid username or email. Please, try again.'), 'danger');
-				return;
-			} else {
-				/* Sending email */
-				$viewVars = array(
-					'username' => $wzuser['Wzuser']['username'],
-					'fullname' => $wzuser['Wzuser']['fullname'],
-					'verification_key' => $wzuser['Wzuser']['verification_key'],
-				);
-				$email_status = $this->Generic->sendEmail(
-					$wzuser['Wzuser']['email'],
-					'Account verification required',
-					'user_resend', $viewVars, true, true
-				);
-
-				if ($email_status) {
-					$this->Session->setFlash(__d('webzash', 'Verification email sent. Please check your email.'), 'success');
-				}
-			}
-		}
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 /**
  * user profile method
  */
 	public function profile() {
-
-		$this->set('title_for_layout', __d('webzash', 'Update Profile'));
-
-		if ($this->Auth->user('role') == 'admin') {
-			$this->layout = 'admin';
-		} else {
-			$this->layout = 'default';
-		}
-
-		$this->Wzuser->useDbConfig = 'wz';
-
-		$wzuser = $this->Wzuser->findById($this->Auth->user('id'));
-		if (!$wzuser) {
-			$this->Session->setFlash(__d('webzash', 'User account not found.'), 'danger');
-			$this->redirect($this->Auth->logout());
-		}
-
-		$prev_email = $wzuser['Wzuser']['email'];
-
-		if ($this->request->is('post') || $this->request->is('put')) {
-
-			$this->Wzuser->id = $this->Auth->user('id');
-
-			/* Update profile user */
-			$ds = $this->Wzuser->getDataSource();
-			$ds->begin();
-
-			if ($this->Wzuser->save($this->request->data, true, array('fullname', 'email'))) {
-				$ds->commit();
-
-				/* If email changed, reset email verification */
-				if ($this->request->data['Wzuser']['email'] != $prev_email) {
-					$this->Wzuser->saveField('email_verified', '0');
-					$this->Wzuser->saveField('verification_key', Security::hash(uniqid() . uniqid()));
-					$this->Session->setFlash(__d('webzash', 'Profile updated. You need to verify your new email address, please check your email for verification details.'), 'success');
-				} else {
-					$this->Session->setFlash(__d('webzash', 'Profile updated.'), 'success');
-				}
-
-				if ($this->Auth->user('role') == 'admin') {
-					return $this->redirect(array('plugin' => 'webzash', 'controller' => 'admin', 'action' => 'index'));
-				} else {
-					return $this->redirect($this->Auth->redirectUrl());
-				}
-			} else {
-				$ds->rollback();
-				$this->Session->setFlash(__d('webzash', 'Failed to update profile. Please, try again.'), 'danger');
-				return;
-			}
-		} else {
-			$this->request->data = $wzuser;
-			return;
-		}
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 /**
  * change password method
  */
 	public function changepass() {
-
-		$this->set('title_for_layout', __d('webzash', 'Change Password'));
-
-		if ($this->Auth->user('role') == 'admin') {
-			$this->layout = 'admin';
-		} else {
-			$this->layout = 'default';
-		}
-
-		$this->Wzuser->useDbConfig = 'wz';
-
-		$wzuser = $this->Wzuser->findById($this->Auth->user('id'));
-		if (!$wzuser) {
-			$this->Session->setFlash(__d('webzash', 'User account not found.'), 'danger');
-			$this->redirect($this->Auth->logout());
-		}
-
-		if ($this->request->is('post') || $this->request->is('put')) {
-			/* Check length of password */
-			if (strlen($this->request->data['Wzuser']['new_password']) < 4) {
-				$this->Session->setFlash(__d('webzash', 'Password should be atleast 4 characters.'), 'danger');
-				return;
-			}
-
-			/* Check if existing passwords match */
-			if ($wzuser['Wzuser']['password'] != Security::hash($this->request->data['Wzuser']['existing_password'], 'sha1', true)) {
-				$this->Session->setFlash(__d('webzash', 'Your existing password does not match. Please, try again.'), 'danger');
-				return;
-			}
-
-			$this->Wzuser->id = $this->Auth->user('id');
-
-			/* Update user password */
-			$ds = $this->Wzuser->getDataSource();
-			$ds->begin();
-
-			if ($this->Wzuser->saveField('password', Security::hash($this->request->data['Wzuser']['new_password'], 'sha1', true))) {
-				$ds->commit();
-
-				$this->Session->setFlash(__d('webzash', 'Password updated.'), 'success');
-
-				/* Sending email */
-				$viewVars = array(
-					'username' => $wzuser['Wzuser']['username'],
-					'fullname' => $wzuser['Wzuser']['fullname'],
-				);
-				$this->Generic->sendEmail(
-					$wzuser['Wzuser']['email'],
-					'Password changed',
-					'user_changepass', $viewVars, true, true
-				);
-
-				if ($this->Auth->user('role') == 'admin') {
-					return $this->redirect(array('plugin' => 'webzash', 'controller' => 'admin', 'action' => 'index'));
-				} else {
-					return $this->redirect($this->Auth->redirectUrl());
-				}
-			} else {
-				$ds->rollback();
-				$this->Session->setFlash(__d('webzash', 'Failed to update password. Please, try again.'), 'danger');
-				return;
-			}
-		} else {
-			return;
-		}
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 /**
  * reset user password by admin method
  */
 	public function resetpass() {
-		$this->set('title_for_layout', __d('webzash', 'Reset Password'));
-
-		$this->Wzuser->useDbConfig = 'wz';
-
-		if (empty($this->passedArgs['userid'])) {
-			$this->Session->setFlash(__d('webzash', 'User account not specified.'), 'danger');
-			return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'index'));
-		}
-
-		$userid = $this->passedArgs['userid'];
-
-		$wzuser = $this->Wzuser->findById($userid);
-		if (!$wzuser) {
-			$this->Session->setFlash(__d('webzash', 'User account not found.'), 'danger');
-			return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'index'));
-		}
-
-		$this->set('username', $wzuser['Wzuser']['username']);
-
-		if ($this->request->is('post') || $this->request->is('put')) {
-			/* Check length of password */
-			if (strlen($this->request->data['Wzuser']['new_password']) < 4) {
-				$this->Session->setFlash(__d('webzash', 'Password should be atleast 4 characters.'), 'danger');
-				return;
-			}
-
-			$this->Wzuser->id = $wzuser['Wzuser']['id'];
-
-			/* Update user password */
-			$ds = $this->Wzuser->getDataSource();
-			$ds->begin();
-
-			if ($this->Wzuser->saveField('password', Security::hash($this->request->data['Wzuser']['new_password'], 'sha1', true))) {
-				$ds->commit();
-
-				/* Sending email */
-				$viewVars = array(
-					'username' => $wzuser['Wzuser']['username'],
-					'fullname' => $wzuser['Wzuser']['fullname'],
-					'password' => $this->request->data['Wzuser']['new_password'],
-				);
-				$email_status = $this->Generic->sendEmail(
-					$wzuser['Wzuser']['email'],
-					'Password changed by admin',
-					'user_resetpass', $viewVars, true, true
-				);
-
-				if ($email_status) {
-					$this->Session->setFlash(__d('webzash', 'User password updated. Email sent to user with the new password.'), 'success');
-				} else {
-					$this->Session->setFlash(__d('webzash', 'User password updated.'), 'success');
-				}
-				return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'index'));
-			} else {
-				$ds->rollback();
-				$this->Session->setFlash(__d('webzash', 'Failed to update user password. Please, try again.'), 'danger');
-				return;
-			}
-		} else {
-			return;
-		}
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 /**
  * forgot password method
  */
 	public function forgot() {
-		$this->set('title_for_layout', __d('webzash', 'Forgot Password'));
-
-		$this->layout = 'user';
-
-		$this->Auth->logout();
-
-		$this->Wzuser->useDbConfig = 'wz';
-
-		if ($this->request->is('post') || $this->request->is('put')) {
-
-			$wzuser = $this->Wzuser->find('first', array('conditions' => array(
-				'username' => $this->request->data['Wzuser']['userinfo']
-			)));
-			if (empty($wzuser)) {
-				$wzuser = $this->Wzuser->find('first', array('conditions' => array(
-					'email' => $this->request->data['Wzuser']['userinfo']
-				)));
-			}
-			if (empty($wzuser)) {
-				$this->Session->setFlash(__d('webzash', 'Invalid username or email. Please, try again.'), 'danger');
-				return;
-			}
-
-			$random_password = substr(str_shuffle("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"), 0, 10);
-
-			$this->Wzuser->id = $wzuser['Wzuser']['id'];
-
-			/* Update user password */
-			$ds = $this->Wzuser->getDataSource();
-			$ds->begin();
-
-			if ($this->Wzuser->saveField('password', Security::hash($random_password, 'sha1', true))) {
-				$ds->commit();
-
-				/* Sending email */
-				$viewVars = array(
-					'username' => $wzuser['Wzuser']['username'],
-					'fullname' => $wzuser['Wzuser']['fullname'],
-					'password' => $random_password,
-				);
-				$email_status = $this->Generic->sendEmail(
-					$wzuser['Wzuser']['email'],
-					'Your login details',
-					'user_forgot', $viewVars, true, true
-				);
-
-				if ($email_status) {
-					$this->Session->setFlash(__d('webzash', 'Password reset. Please check your email for more details on how to reset password.'), 'success');
-				}
-				return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'login'));
-			}
-		} else {
-			return;
-		}
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 /**
  * register user method
  */
 	public function register() {
-
-		$this->set('title_for_layout', __d('webzash', 'User Registration'));
-
-		$this->layout = 'user';
-
-		$this->Wzuser->useDbConfig = 'wz';
-		$this->Wzsetting->useDbConfig = 'wz';
-
-		$wzsetting = $this->Wzsetting->findById(1);
-
-		if ($wzsetting['Wzsetting']['user_registration'] != 1) {
-			$this->set('registration', false);
-			return;
-		}
-
-		$this->set('registration', true);
-
-		/* On POST */
-		if ($this->request->is('post')) {
-			$this->Wzuser->create();
-			if (!empty($this->request->data)) {
-				/* Unset ID */
-				unset($this->request->data['Wzuser']['id']);
-				unset($this->request->data['Wzuser']['timezone']);
-				unset($this->request->data['Wzuser']['role']);
-				unset($this->request->data['Wzuser']['status']);
-				unset($this->request->data['Wzuser']['verification_key']);
-				unset($this->request->data['Wzuser']['email_verified']);
-				unset($this->request->data['Wzuser']['admin_verified']);
-
-				/* Check length of password */
-				if (strlen($this->request->data['Wzuser']['password']) < 4) {
-					$this->Session->setFlash(__d('webzash', 'Password should be atleast 4 characters.'), 'danger');
-					return;
-				}
-
-				$verification_key = Security::hash(uniqid() . uniqid());
-
-				$user = array('Wzuser' => array(
-					'username' => $this->request->data['Wzuser']['username'],
-					'password' => Security::hash($this->request->data['Wzuser']['password'], 'sha1', true),
-					'fullname' => $this->request->data['Wzuser']['fullname'],
-					'email' => $this->request->data['Wzuser']['email'],
-					'timezone' => 'UTC',
-					'role' => 'guest',
-					'status' => '1',
-					'verification_key' => $verification_key,
-					'email_verified' => '0',
-					'admin_verified' => '0',
-					'retry_count' => '0',
-					'all_accounts' => '0',
-				));
-
-				/* Save user */
-				$ds = $this->Wzuser->getDataSource();
-				$ds->begin();
-
-				if ($this->Wzuser->save($user)) {
-					$ds->commit();
-					$this->Session->setFlash(__d('webzash', 'User account created.'), 'success');
-
-					/* Sending email */
-					$viewVars = array(
-						'username' => $this->request->data['Wzuser']['username'],
-						'fullname' => $this->request->data['Wzuser']['fullname'],
-						'verification_key' => $verification_key,
-						'email_verification' => $wzsetting['Wzsetting']['email_verification'],
-						'admin_verification' => $wzsetting['Wzsetting']['admin_verification'],
-					);
-					$this->Generic->sendEmail(
-						$this->request->data['Wzuser']['email'],
-						'Your registraion details',
-						'user_register', $viewVars, true, true
-					);
-
-					return $this->redirect(array('plugin' => 'webzash', 'controller' => 'wzusers', 'action' => 'index'));
-				} else {
-					$ds->rollback();
-					$this->Session->setFlash(__d('webzash', 'Failed to create user account. Please, try again.'), 'danger');
-					return;
-				}
-			} else {
-				$this->Session->setFlash(__d('webzash', 'No data. Please, try again.'), 'danger');
-				return;
-			}
-		}
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 /**
  * first time login for admin user
  */
 	public function first() {
-
-		$this->set('title_for_layout', __d('webzash', 'First time login'));
-
-		$this->layout = 'admin';
-
-		/* Validate access to this method */
-		if ($this->Auth->user('role') != 'admin') {
-			$this->Session->setFlash(__d('webzash', 'Access denied.'), 'danger');
-			return $this->redirect($this->Auth->logout());
-		}
-		if ($this->Session->read('FirstLogin') != 1) {
-			$this->Session->setFlash(__d('webzash', 'Access denied.'), 'danger');
-			return $this->redirect($this->Auth->logout());
-		}
-		if ($this->Auth->user('id') != '1') {
-			$this->Session->setFlash(__d('webzash', 'Access denied.'), 'danger');
-			return $this->redirect($this->Auth->logout());
-		}
-		if ($this->Auth->user('username') != 'admin') {
-			$this->Session->setFlash(__d('webzash', 'Access denied.'), 'danger');
-			return $this->redirect($this->Auth->logout());
-		}
-
-		/* On POST */
-		if ($this->request->is('post') || $this->request->is('put')) {
-
-			$this->Wzuser->id = $this->Auth->user('id');
-
-			$user = array('Wzuser' => array(
-				'id' => $this->Auth->user('id'),
-				'password' => Security::hash($this->request->data['Wzuser']['password'], 'sha1', true),
-				'fullname' => $this->request->data['Wzuser']['fullname'],
-				'email' => $this->request->data['Wzuser']['email'],
-			));
-
-			/* Save user */
-			$ds = $this->Wzuser->getDataSource();
-			$ds->begin();
-
-			if ($this->Wzuser->save($user, true, array('password', 'fullname', 'email'))) {
-				$ds->commit();
-				$this->Session->setFlash(__d('webzash', 'Profile updated.'), 'success');
-				$this->Session->delete('FirstLogin');
-				return $this->redirect(array('plugin' => 'webzash', 'controller' => 'admin', 'action' => 'index'));
-			} else {
-				$ds->rollback();
-				$this->Session->setFlash(__d('webzash', 'Failed to update profile. Please, try again.'), 'danger');
-				return;
-			}
-		}
+		$joomla = new JoomlaAuth();
+		return $this->redirect($joomla->siteURL());
 	}
 
 /**
